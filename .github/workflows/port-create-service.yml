@@ -1,0 +1,120 @@
+name: Scaffold a New Service
+
+on:
+  workflow_dispatch:
+    inputs:
+      service_name:
+        required: true
+        description: The name of the new service (and GitHub repo)
+        type: string
+      description:
+        required: false
+        description: Brief description of the service
+        type: string
+      azure_location:
+        required: true
+        description: Azure region for the resource group
+        type: string
+      team:
+        required: true
+        description: Owning team name
+        type: string
+
+jobs:
+  scaffold-service:
+    runs-on: ubuntu-latest
+    env:
+      ORG_NAME: sl31pn1r
+
+    steps:
+      - uses: actions/checkout@v4
+
+      # ── 1. Notify Port: starting ──────────────────────────────────────────
+      - name: Log start to Port
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: PATCH_RUN
+          runId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          logMessage: "🚀 Starting scaffold for service: ${{ inputs.service_name }}"
+
+      # ── 2. Create Azure Resource Group ────────────────────────────────────
+      - name: Azure Login
+        uses: azure/login@v2
+        with:
+          creds: ${{ secrets.AZURE_CREDENTIALS }}
+
+      - name: Create Azure Resource Group
+        uses: azure/cli@v2
+        with:
+          azcliversion: latest
+          inlineScript: |
+            az group create \
+              --name "${{ inputs.service_name }}-rg" \
+              --location "${{ inputs.azure_location }}" \
+              --tags managed-by=port \
+                     service="${{ inputs.service_name }}" \
+                     owning-team="${{ inputs.team }}"
+
+      - name: Log Azure RG created
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: PATCH_RUN
+          runId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          logMessage: "✅ Azure resource group '${{ inputs.service_name }}-rg' created in ${{ inputs.azure_location }}"
+
+      # ── 3. Create GitHub Repository from template ─────────────────────────
+      - name: Create GitHub Repository
+        uses: port-labs/cookiecutter-gha@v1.1.1
+        with:
+          portClientId: ${{ secrets.PORT_CLIENT_ID }}
+          portClientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          token: ${{ secrets.ORG_ADMIN_TOKEN }}
+          portRunId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          repositoryName: ${{ inputs.service_name }}
+          portUserInputs: '{"cookiecutter_app_name": "${{ inputs.service_name }}"}'
+          cookiecutterTemplate: https://github.com/lacion/cookiecutter-golang
+          blueprintIdentifier: githubRepository
+          organizationName: ${{ env.ORG_NAME }}
+          createPortEntity: false
+
+      - name: Log GitHub repo created
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: PATCH_RUN
+          runId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          logMessage: "✅ GitHub repository '${{ inputs.service_name }}' created in ${{ env.ORG_NAME }}"
+
+      # ── 4. Report SUCCESS to Port ─────────────────────────────────────────
+      - name: Report success to Port
+        if: success()
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: PATCH_RUN
+          runId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          status: SUCCESS
+          summary: "Service '${{ inputs.service_name }}' scaffolded successfully — Azure RG and GitHub repo created."
+
+      # ── 5. Report FAILURE to Port ─────────────────────────────────────────
+      - name: Report failure to Port
+        if: failure()
+        uses: port-labs/port-github-action@v1
+        with:
+          clientId: ${{ secrets.PORT_CLIENT_ID }}
+          clientSecret: ${{ secrets.PORT_CLIENT_SECRET }}
+          baseUrl: https://api.port.io
+          operation: PATCH_RUN
+          runId: ${{ fromJson(github.event.inputs.port_context || '{}').runId }}
+          status: FAILURE
+          summary: "Failed to scaffold service '${{ inputs.service_name }}' — check logs above."
